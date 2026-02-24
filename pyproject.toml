@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kilo-proxy"
+version = "1.0.0"
+description = "Fully OpenAI-compatible API proxy for Kilo"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "lousybook94", email = "lousybook94@gmail.com" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "httpx>=0.26.0",
+    "typer>=0.9.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/notlousybook/KiloProxy"
+Repository = "https://github.com/notlousybook/KiloProxy"
+Issues = "https://github.com/notlousybook/KiloProxy/issues"
+
+[project.scripts]
+kilo-proxy = "kilo_proxy.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kilo_proxy*"]
