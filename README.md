@@ -1,6 +1,11 @@
 # Kilo Proxy
 
+[![PyPI](https://img.shields.io/pypi/v/kilo-proxy?color=blue)](https://pypi.org/project/kilo-proxy/)
+[![GitHub](https://img.shields.io/github/license/notlousybook/KiloProxy)](https://github.com/notlousybook/KiloProxy)
+
 A fully OpenAI-compatible API proxy for Kilo.
+
+[GitHub](https://github.com/notlousybook/KiloProxy) • [PyPI](https://pypi.org/project/kilo-proxy/)
 
 ## Features
 
