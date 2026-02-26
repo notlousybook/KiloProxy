@@ -94,6 +94,78 @@ kilo-proxy broke off      # Disable broke mode
 kilo-proxy broke --list   # List all free models
 ```
 
+### Restart Server
+
+Restart the proxy server:
+
+```bash
+kilo-proxy restart
+```
+
+### Generate New Session
+
+Generate a new session ID to bypass rate limits:
+
+```bash
+kilo-proxy new-session
+```
+
+### View Logs
+
+View server logs:
+
+```bash
+kilo-proxy logs                    # Show last 100 lines
+kilo-proxy logs --lines 50        # Show last 50 lines
+kilo-proxy logs --errors          # Show errors only
+kilo-proxy logs --follow          # Follow log output
+```
+
+### Start Proxy and OpenCode
+
+Start the proxy and launch OpenCode:
+
+```bash
+kilo-proxy opencode
+```
+
+### IP Shuffler
+
+Rotate your IP address to bypass rate limits! Load proxies from a URL or file, and the shuffler will automatically rotate your IP at a set interval.
+
+```bash
+# Enable/disable IP shuffling
+kilo-proxy shuffle on
+kilo-proxy shuffle off
+
+# Add proxies manually
+kilo-proxy shuffle add http://ip:port
+kilo-proxy shuffle add socks5://ip:port
+
+# Load proxies from URL or file (one per line, # for comments)
+kilo-proxy shuffle load https://example.com/proxies.txt
+kilo-proxy shuffle load ./proxies.txt
+
+# List configured proxies
+kilo-proxy shuffle list
+
+# Set shuffle interval (minimum 60 seconds)
+kilo-proxy shuffle interval 300
+
+# Force immediate shuffle
+kilo-proxy shuffle now
+
+# Check all proxies (mark working/broken)
+kilo-proxy shuffle check
+kilo-proxy shuffle check --remove  # Auto-remove broken proxies
+
+# Fix/normalize proxy URLs
+kilo-proxy shuffle fix
+
+# View shuffler status
+kilo-proxy shuffle status
+```
+
 ### Configuration Wizard
 
 Interactive configuration:
