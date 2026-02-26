@@ -295,6 +295,7 @@ MIT
 ## Author
 
 - **lousybook94** (notlousybook)
-- GitHub: https://github.com/notlousybook
+- GitHub: https://github.com/notlousybook/KiloProxy
+- PyPI: https://pypi.org/project/kilo-proxy/
 - Email: lousybook94@gmail.com
 - Location: Pluto, the planet
