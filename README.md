@@ -14,13 +14,13 @@ A fully OpenAI-compatible API proxy for Kilo.
 ## Installation
 
 ```bash
-pip install -e .
+pip install kilo-proxy
 ```
 
 Or install from source:
 
 ```bash
-pip install .
+pip install -e .
 ```
 
 ## CLI Commands
