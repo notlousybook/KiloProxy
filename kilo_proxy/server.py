@@ -1,6 +1,8 @@
 """FastAPI server for kilo-proxy."""
 
 import json
+import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -10,14 +12,26 @@ from pydantic import BaseModel
 
 from kilo_proxy import __version__
 from kilo_proxy.config import load_config
+from kilo_proxy.ip_shuffler import init_shuffler, shutdown_shuffler
 from kilo_proxy.proxy import (
     ProxyClient,
     proxy_chat_completions,
     proxy_completions,
     proxy_embeddings,
-    proxy_model,
-    proxy_models,
 )
+
+LOG_DIR = Path.home() / ".kilo-proxy" / "logs"
+LOG_FILE = LOG_DIR / "server.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("kilo-proxy")
 
 app = FastAPI(
     title="Kilo Proxy",
@@ -32,6 +46,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting Kilo Proxy server")
+    await init_shuffler()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down Kilo Proxy server")
+    await shutdown_shuffler()
 
 
 class ChatMessage(BaseModel):
@@ -246,6 +272,7 @@ async def proxy_catch_all(
     request: Request,
     authorization: Optional[str] = Header(None),
 ):
+    logger.info(f"Proxy catch-all: {request.method} /v1/{path}")
     auth_token = get_auth_token(authorization)
     body = await request.body()
     headers = dict(request.headers)
@@ -253,6 +280,10 @@ async def proxy_catch_all(
     headers.pop("content-length", None)
 
     extra_headers = get_extra_headers(request)
+
+    is_streaming = request.headers.get("accept") == "text/event-stream" or (
+        body and b'"stream":true' in body
+    )
 
     async with ProxyClient(auth_token, extra_headers) as client:
         url = f"https://api.kilo.ai/api/openrouter/{path}"
@@ -266,28 +297,55 @@ async def proxy_catch_all(
         else:
             body_json = None
 
-        if method == "GET":
-            response = await client._client.get(url, headers=client._client.headers)
-        elif method == "POST":
-            response = await client._client.post(
-                url, headers=client._client.headers, json=body_json
-            )
-        elif method == "PUT":
-            response = await client._client.put(
-                url, headers=client._client.headers, json=body_json
-            )
-        elif method == "DELETE":
-            response = await client._client.delete(url, headers=client._client.headers)
-        elif method == "PATCH":
-            response = await client._client.patch(
-                url, headers=client._client.headers, json=body_json
-            )
-        else:
-            raise HTTPException(status_code=405, detail="Method not allowed")
+        if is_streaming and method == "POST":
+            from kilo_proxy.proxy import create_streaming_generator
 
-        return JSONResponse(
-            content=response.json()
-            if response.headers.get("content-type", "").startswith("application/json")
-            else response.text,
-            status_code=response.status_code,
-        )
+            return StreamingResponse(
+                create_streaming_generator(
+                    url, client._client.headers, body_json or {}
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        try:
+            if method == "GET":
+                response = await client._client.get(url, headers=client._client.headers)
+            elif method == "POST":
+                response = await client._client.post(
+                    url, headers=client._client.headers, json=body_json
+                )
+            elif method == "PUT":
+                response = await client._client.put(
+                    url, headers=client._client.headers, json=body_json
+                )
+            elif method == "DELETE":
+                response = await client._client.delete(
+                    url, headers=client._client.headers
+                )
+            elif method == "PATCH":
+                response = await client._client.patch(
+                    url, headers=client._client.headers, json=body_json
+                )
+            else:
+                raise HTTPException(status_code=405, detail="Method not allowed")
+        except Exception as e:
+            logger.error(f"Proxy error: {e}")
+            raise
+
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                return JSONResponse(
+                    content=response.json(), status_code=response.status_code
+                )
+            except Exception:
+                return JSONResponse(
+                    content={"error": response.text}, status_code=response.status_code
+                )
+        else:
+            return JSONResponse(content=response.text, status_code=response.status_code)

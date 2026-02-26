@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from kilo_proxy.config import load_config, generate_kilo_session_id
+from kilo_proxy.ip_shuffler import get_shuffler
 
 BASE_URL = "https://api.kilo.ai/api/openrouter"
 
@@ -26,7 +27,11 @@ def get_headers(
 ) -> Dict[str, str]:
     config = load_config()
     token = auth_token or config.auth_token or "anonymous"
-    session_id = config.session_id or generate_kilo_session_id()
+    shuffler = get_shuffler()
+    if shuffler.is_enabled():
+        session_id = shuffler.get_current_session_id()
+    else:
+        session_id = config.session_id or generate_kilo_session_id()
     headers = DEFAULT_HEADERS.copy()
     headers["Authorization"] = f"Bearer {token}"
     headers["X-KILOCODE-TASKID"] = session_id
@@ -45,18 +50,31 @@ def transform_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 async def create_streaming_generator(
     url: str, headers: Dict[str, str], body: Dict[str, Any]
-) -> AsyncIterator[str]:
-    client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
+) -> AsyncIterator[bytes]:
+    shuffler = get_shuffler()
+    proxy = shuffler.get_current_proxy()
+    if proxy:
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=30.0), proxy=proxy
+        )
+    else:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
     try:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 error_body = await response.aread()
-                yield f"data: {json.dumps({'error': error_body.decode()})}\n\n"
+                yield f"data: {json.dumps({'error': error_body.decode()})}\n\n".encode()
                 return
 
-            async for line in response.aiter_lines():
-                if line:
-                    yield f"{line}\n"
+            async for chunk in response.aiter_bytes(chunk_size=32):
+                if chunk:
+                    yield chunk
+    except httpx.ProxyError as e:
+        logger.error(f"Proxy error in streaming (check your proxy configuration): {e}")
+        yield f"data: {json.dumps({'error': f'Proxy error: {str(e)}. Check your proxy configuration.'})}\n\n".encode()
+    except Exception as e:
+        logger.error(f"Streaming error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
     finally:
         await client.aclose()
 
@@ -72,7 +90,14 @@ class ProxyClient:
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self):
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
+        shuffler = get_shuffler()
+        proxy = shuffler.get_current_proxy()
+        if proxy:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=30.0), proxy=proxy
+            )
+        else:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -203,8 +228,21 @@ async def proxy_chat_completions(
             },
         )
     else:
-        async with ProxyClient(auth_token, extra_headers) as client:
-            return await client.chat_completions(body)
+        try:
+            async with ProxyClient(auth_token, extra_headers) as client:
+                return await client.chat_completions(body)
+        except httpx.ProxyError as e:
+            logger.error(f"Proxy error (check your proxy configuration): {e}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Proxy error: {str(e)}. Check your proxy configuration.",
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Request error: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Request to Kilo API failed: {str(e)}",
+            )
 
 
 async def proxy_completions(

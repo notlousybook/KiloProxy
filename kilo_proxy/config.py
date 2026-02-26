@@ -4,7 +4,8 @@ import json
 import random
 import string
 from pathlib import Path
-from typing import Optional
+
+from typing import List
 
 from pydantic import BaseModel
 
@@ -21,6 +22,11 @@ class Config(BaseModel):
     port: int = 5380
     session_id: str = ""
     broke: bool = False
+    ip_shuffle_enabled: bool = False
+    ip_shuffle_interval: int = 900
+    proxy_list: List[str] = []
+    current_proxy_index: int = 0
+    last_shuffle_time: float = 0.0
 
     def __init__(self, **data):
         super().__init__(**data)

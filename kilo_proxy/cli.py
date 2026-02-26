@@ -1,5 +1,6 @@
 """CLI for kilo-proxy."""
 
+import asyncio
 import copy
 import json
 import os
@@ -9,12 +10,11 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import httpx
 import typer
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -28,6 +28,10 @@ from kilo_proxy.config import (
     regenerate_session_id,
     save_config,
 )
+from kilo_proxy.ip_shuffler import get_shuffler
+
+LOG_DIR = Path.home() / ".kilo-proxy" / "logs"
+LOG_FILE = LOG_DIR / "server.log"
 
 app = typer.Typer(name="kilo-proxy", help="Fully OpenAI-compatible API proxy for Kilo")
 console = Console()
@@ -219,6 +223,106 @@ def stop():
 
 
 @app.command()
+def restart():
+    """Restart the proxy server."""
+    pid = get_server_pid()
+    was_running = pid and is_server_running(pid)
+
+    if was_running:
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                PROCESS_TERMINATE = 0x0001
+                handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                if handle:
+                    kernel32.TerminateProcess(handle, 0)
+                    kernel32.CloseHandle(handle)
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+            time.sleep(2)
+            if is_server_running(pid):
+                if sys.platform == "win32":
+                    import ctypes
+
+                    kernel32 = ctypes.windll.kernel32
+                    PROCESS_TERMINATE = 0x0001
+                    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                    if handle:
+                        kernel32.TerminateProcess(handle, 1)
+                        kernel32.CloseHandle(handle)
+                else:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+            remove_pid()
+        except Exception as e:
+            console.print(f"[yellow]Warning: {e}[/yellow]")
+
+    time.sleep(1)
+
+    config = load_config()
+    host, port = config.host, config.port
+
+    if sys.platform == "win32":
+        if sys.executable.endswith("python.exe"):
+            python_exe = sys.executable
+        else:
+            python_exe = sys.executable
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+        process = subprocess.Popen(
+            [
+                python_exe,
+                "-m",
+                "kilo_proxy.server_runner",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ],
+            creationflags=creationflags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(3)
+        if process.poll() is not None and process.returncode != 0:
+            console.print(
+                f"[red]Server failed to start (exit code: {process.returncode})[/red]"
+            )
+            return
+        write_pid(process.pid)
+        console.print(
+            f"[green]Server restarted on {host}:{port} with PID {process.pid}[/green]"
+        )
+    else:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "kilo_proxy.server_runner",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        time.sleep(3)
+        if process.poll() is not None and process.returncode != 0:
+            console.print(
+                f"[red]Server failed to start (exit code: {process.returncode})[/red]"
+            )
+            return
+        write_pid(process.pid)
+        console.print(
+            f"[green]Server restarted on {host}:{port} with PID {process.pid}[/green]"
+        )
+
+
+@app.command()
 def proxy(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     port: int = typer.Option(5380, "--port", "-p", help="Port to bind to"),
@@ -304,6 +408,9 @@ def broke(
     console.print(f"Broke mode: {status}")
     if config.broke:
         console.print("[dim]Only free models will be shown[/dim]")
+    console.print(
+        "[cyan]Note: Restart the server for changes to take effect: kilo-proxy restart[/cyan]"
+    )
 
 
 def _list_free_models(config: Config):
@@ -565,13 +672,13 @@ def apply_omo_mappings(omo_config: dict, mappings: dict) -> dict:
         if "model" in agent_config:
             original = agent_config["model"]
             if original in mappings:
-                agent_config["model"] = f"kilo/{mappings[original]}"
+                agent_config["model"] = f"kilo-proxy/{mappings[original]}"
 
     for cat_name, cat_config in config.get("categories", {}).items():
         if "model" in cat_config:
             original = cat_config["model"]
             if original in mappings:
-                cat_config["model"] = f"kilo/{mappings[original]}"
+                cat_config["model"] = f"kilo-proxy/{mappings[original]}"
 
     return config
 
@@ -621,7 +728,6 @@ def interactive_model_picker(
         for i, m in enumerate(page_models):
             idx = start + i
             marker = "*" if m["id"] == default else " "
-            name = m.get("name", m["id"])[:40]
             console.print(f"    {marker} {idx + 1:3d}. {m['id'][:50]}")
 
         console.print(
@@ -791,7 +897,7 @@ def install_opencode():
                 else:
                     console.print(f"  Model mapping for '{omo_model}':")
                     selected = interactive_model_picker(
-                        models, default=default_model, prompt=f"    Replace with"
+                        models, default=default_model, prompt="    Replace with"
                     )
                     omo_model_map[omo_model] = selected
                     console.print(f"    [green]{omo_model} -> {selected}[/green]")
@@ -814,30 +920,30 @@ def install_opencode():
             if "agents" in omo_config:
                 for agent_name, agent_cfg in omo_config["agents"].items():
                     if "model" in agent_cfg:
-                        current = agent_cfg["model"].replace("kilo/", "")
+                        current = agent_cfg["model"].replace("kilo-proxy/", "")
                         console.print(f"\n  Agent '{agent_name}':")
                         selected = interactive_model_picker(
                             models,
                             default=current
                             if current in [m["id"] for m in models]
                             else default_model,
-                            prompt=f"    Select model",
+                            prompt="    Select model",
                         )
-                        agent_cfg["model"] = f"kilo/{selected}"
+                        agent_cfg["model"] = f"kilo-proxy/{selected}"
 
             if "categories" in omo_config:
                 for cat_name, cat_cfg in omo_config["categories"].items():
                     if "model" in cat_cfg:
-                        current = cat_cfg["model"].replace("kilo/", "")
+                        current = cat_cfg["model"].replace("kilo-proxy/", "")
                         console.print(f"\n  Category '{cat_name}':")
                         selected = interactive_model_picker(
                             models,
                             default=current
                             if current in [m["id"] for m in models]
                             else default_model,
-                            prompt=f"    Select model",
+                            prompt="    Select model",
                         )
-                        cat_cfg["model"] = f"kilo/{selected}"
+                        cat_cfg["model"] = f"kilo-proxy/{selected}"
 
     console.print()
 
@@ -874,7 +980,7 @@ def install_opencode():
 
     kilo_provider = {
         "npm": "@ai-sdk/openai-compatible",
-        "name": "Kilo",
+        "name": "Kilo-Proxy",
         "options": {
             "baseURL": f"http://{config.host}:{config.port}/v1",
             "apiKey": config.auth_token,
@@ -887,7 +993,7 @@ def install_opencode():
 
     if "provider" not in existing_config:
         existing_config["provider"] = {}
-    existing_config["provider"]["kilo"] = kilo_provider
+    existing_config["provider"]["kilo-proxy"] = kilo_provider
 
     if install_omo:
         if "plugin" not in existing_config:
@@ -933,83 +1039,71 @@ def unautolaunch_cmd():
 
 
 def _install_windows_startup(config: Config):
-    import ctypes
+    startup_folder = (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+    )
+    if not startup_folder.exists():
+        startup_folder.mkdir(parents=True, exist_ok=True)
 
-    task_name = "KiloProxy"
+    shortcut_path = startup_folder / "KiloProxy.lnk"
+
     python_exe = sys.executable
-
     python_dir = Path(python_exe).parent
     pythonw_exe = python_dir / "pythonw.exe"
     exe_to_use = str(pythonw_exe) if pythonw_exe.exists() else python_exe
+    working_dir = str(Path(__file__).parent.parent)
 
-    cmd = f'"{exe_to_use}" -m kilo_proxy.server_runner --host {config.host} --port {config.port}'
+    ps_script = f'''
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut("{shortcut_path}")
+$s.TargetPath = "{exe_to_use}"
+$s.Arguments = "-m kilo_proxy.server_runner --host {config.host} --port {config.port}"
+$s.WorkingDirectory = "{working_dir}"
+$s.Description = "Kilo Proxy"
+$s.Save()
+'''
 
     try:
         result = subprocess.run(
-            [
-                "schtasks",
-                "/Create",
-                "/TN",
-                task_name,
-                "/TR",
-                cmd,
-                "/SC",
-                "ONLOGON",
-                "/RL",
-                "HIGHEST",
-                "/F",
-            ],
+            ["powershell", "-Command", ps_script],
             capture_output=True,
             text=True,
         )
 
-        if result.returncode == 0:
+        if result.returncode == 0 and shortcut_path.exists():
             console.print(
-                f"[green]Autolaunch installed! Kilo Proxy will start on login.[/green]"
+                "[green]Autolaunch installed! Kilo Proxy will start on login.[/green]"
             )
         else:
-            if ctypes.windll.shell32.IsUserAnAdmin():
-                console.print(
-                    f"[red]Failed to create scheduled task: {result.stderr}[/red]"
-                )
-            else:
-                console.print("[yellow]Trying with admin privileges...[/yellow]")
-                ctypes.windll.shell32.ShellExecuteW(
-                    None,
-                    "runas",
-                    "schtasks",
-                    f'/Create /TN {task_name} /TR "{cmd}" /SC ONLOGON /RL HIGHEST /F',
-                    None,
-                    1,
-                )
-                console.print(
-                    f"[green]Autolaunch installed! Kilo Proxy will start on login.[/green]"
-                )
+            console.print(
+                f"[red]Failed to create startup shortcut: {result.stderr}[/red]"
+            )
     except Exception as e:
         console.print(f"[red]Error installing autolaunch: {e}[/red]")
 
 
 def _uninstall_windows_startup():
-    import ctypes
-
-    task_name = "KiloProxy"
+    startup_folder = (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+    )
+    shortcut_path = startup_folder / "KiloProxy.lnk"
 
     try:
-        result = subprocess.run(
-            ["schtasks", "/Delete", "/TN", task_name, "/F"],
-            capture_output=True,
-            text=True,
-        )
-
-        if (
-            result.returncode == 0
-            or "The system cannot find the file specified" in result.stderr
-        ):
+        if shortcut_path.exists():
+            shortcut_path.unlink()
             console.print("[green]Autolaunch removed![/green]")
         else:
-            console.print(
-                f"[red]Failed to remove scheduled task: {result.stderr}[/red]"
-            )
+            console.print("[yellow]No autolaunch shortcut found[/yellow]")
     except Exception as e:
         console.print(f"[red]Error removing autolaunch: {e}[/red]")
 
@@ -1132,6 +1226,312 @@ def config_show():
 
     console.print(f"[cyan]Config file: {config_path}[/cyan]")
     console.print_json(json.dumps(config.model_dump(), indent=2))
+
+
+@app.command("logs")
+def logs_cmd(
+    lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output"),
+    errors_only: bool = typer.Option(False, "--errors", "-e", help="Show errors only"),
+):
+    """Show server logs."""
+    if not LOG_FILE.exists():
+        console.print(
+            "[yellow]No log file found. Server may not have started yet.[/yellow]"
+        )
+        return
+
+    if errors_only:
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+                error_lines = [
+                    line
+                    for line in content.splitlines()
+                    if "ERROR" in line or "CRITICAL" in line
+                ]
+                if error_lines:
+                    for line in error_lines[-lines:]:
+                        console.print(line)
+                else:
+                    console.print("[yellow]No errors found[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Error reading logs: {e}[/red]")
+        return
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+            for line in all_lines[-lines:]:
+                console.print(line.rstrip())
+    except Exception as e:
+        console.print(f"[red]Error reading logs: {e}[/red]")
+
+
+shuffle_app = typer.Typer(name="shuffle", help="IP shuffler management")
+app.add_typer(shuffle_app, name="shuffle")
+
+
+@shuffle_app.command("on")
+def shuffle_on():
+    """Enable IP shuffling."""
+    shuffler = get_shuffler()
+    asyncio.run(shuffler.set_enabled(True))
+    console.print("[green]IP shuffling enabled[/green]")
+    if not shuffler.get_proxy_list():
+        console.print(
+            "[yellow]No proxies configured. Add with: kilo-proxy shuffle add <url>[/yellow]"
+        )
+
+
+@shuffle_app.command("off")
+def shuffle_off():
+    """Disable IP shuffling."""
+    shuffler = get_shuffler()
+    asyncio.run(shuffler.set_enabled(False))
+    console.print("[yellow]IP shuffling disabled[/yellow]")
+
+
+@shuffle_app.command("add")
+def shuffle_add(
+    proxy_url: str = typer.Argument(
+        ..., help="Proxy URL (e.g., http://ip:port or socks5://ip:port)"
+    ),
+):
+    """Add a proxy to the rotation list."""
+    shuffler = get_shuffler()
+    asyncio.run(shuffler.add_proxy(proxy_url))
+    console.print(f"[green]Added proxy: {proxy_url}[/green]")
+
+
+@shuffle_app.command("remove")
+def shuffle_remove(
+    proxy_url: str = typer.Argument(..., help="Proxy URL to remove"),
+):
+    """Remove a proxy from the rotation list."""
+    shuffler = get_shuffler()
+    removed = asyncio.run(shuffler.remove_proxy(proxy_url))
+    if removed:
+        console.print(f"[green]Removed proxy: {proxy_url}[/green]")
+    else:
+        console.print(f"[yellow]Proxy not found: {proxy_url}[/yellow]")
+
+
+@shuffle_app.command("clear")
+def shuffle_clear():
+    """Clear all proxies from the rotation list."""
+    shuffler = get_shuffler()
+    asyncio.run(shuffler.clear_proxies())
+    console.print("[green]All proxies cleared[/green]")
+
+
+@shuffle_app.command("load")
+def shuffle_load(
+    source: str = typer.Argument(
+        ..., help="URL or file path to load proxies from (one per line)"
+    ),
+    timeout: int = typer.Option(
+        30, "--timeout", "-t", help="Timeout in seconds for URLs"
+    ),
+):
+    """Load proxies from a URL or file (auto-detected). Lines starting with # are comments."""
+    shuffler = get_shuffler()
+    is_url = source.startswith(("http://", "https://"))
+    source_type = "URL" if is_url else "file"
+
+    try:
+        added = asyncio.run(shuffler.load_proxies(source, timeout))
+        console.print(
+            f"[green]Loaded {added} proxies from {source_type}: {source}[/green]"
+        )
+    except Exception as e:
+        console.print(f"[red]Error loading proxies from {source_type}: {e}[/red]")
+
+
+@shuffle_app.command("load-file", hidden=True)
+def shuffle_load_file(
+    file_path: str = typer.Argument(
+        ..., help="Path to file containing proxies (one per line)"
+    ),
+):
+    """Load proxies from a file (one proxy per line, lines starting with # are comments)."""
+    shuffler = get_shuffler()
+
+    try:
+        added = asyncio.run(shuffler.load_proxies(file_path))
+        console.print(f"[green]Loaded {added} proxies from {file_path}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error loading proxies: {e}[/red]")
+
+
+@shuffle_app.command("load-url", hidden=True)
+def shuffle_load_url(
+    url: str = typer.Argument(..., help="URL to fetch proxies from (one per line)"),
+    timeout: int = typer.Option(30, "--timeout", "-t", help="Timeout in seconds"),
+):
+    """Load proxies from a URL (one proxy per line, lines starting with # are comments)."""
+    shuffler = get_shuffler()
+
+    try:
+        added = asyncio.run(shuffler.load_proxies(url, timeout))
+        console.print(f"[green]Loaded {added} proxies from {url}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error loading proxies: {e}[/red]")
+
+
+@shuffle_app.command("list")
+def shuffle_list():
+    """List all configured proxies."""
+    shuffler = get_shuffler()
+    proxies = shuffler.get_proxy_list()
+
+    if not proxies:
+        console.print("[yellow]No proxies configured[/yellow]")
+        return
+
+    table = Table(title="Configured Proxies")
+    table.add_column("#", style="dim")
+    table.add_column("Proxy URL", style="cyan")
+    table.add_column("Status", style="green")
+
+    current_idx = shuffler.get_current_index()
+    for i, proxy in enumerate(proxies):
+        status = "[yellow]* CURRENT[/yellow]" if i == current_idx else ""
+        table.add_row(str(i + 1), proxy, status)
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(proxies)} proxies[/dim]")
+
+
+@shuffle_app.command("interval")
+def shuffle_interval(
+    seconds: int = typer.Argument(..., help="Shuffle interval in seconds (minimum 60)"),
+):
+    """Set the shuffle interval in seconds."""
+    shuffler = get_shuffler()
+    asyncio.run(shuffler.set_interval(seconds))
+    actual = shuffler.get_interval()
+    console.print(
+        f"[green]Shuffle interval set to {actual} seconds ({actual // 60} minutes)[/green]"
+    )
+
+
+@shuffle_app.command("now")
+def shuffle_now():
+    """Force an immediate shuffle."""
+    shuffler = get_shuffler()
+    proxy, session_id = asyncio.run(shuffler.shuffle_now())
+    if proxy:
+        console.print(f"[green]Shuffled to proxy: {proxy}[/green]")
+    else:
+        console.print("[green]Session ID regenerated (no proxy configured)[/green]")
+    console.print(f"[dim]New session ID: {session_id}[/dim]")
+
+
+@shuffle_app.command("fix")
+def shuffle_fix():
+    """Fix and normalize existing proxy URLs in config."""
+    shuffler = get_shuffler()
+    proxies = shuffler.get_proxy_list()
+
+    if not proxies:
+        console.print("[yellow]No proxies to fix[/yellow]")
+        return
+
+    normalized = []
+    for proxy in proxies:
+        normalized.append(shuffler.normalize_proxy(proxy))
+
+    asyncio.run(shuffler.clear_proxies())
+    asyncio.run(shuffler.add_proxies(normalized))
+
+    console.print(f"[green]Fixed {len(normalized)} proxies[/green]")
+    for i, p in enumerate(normalized):
+        console.print(f"  {i + 1}. {p}")
+
+
+@shuffle_app.command("check")
+def shuffle_check(
+    timeout: int = typer.Option(
+        30, "--timeout", "-t", help="Timeout in seconds for each proxy"
+    ),
+    remove: bool = typer.Option(
+        False, "--remove", "-r", help="Automatically remove broken proxies"
+    ),
+):
+    """Check all proxies and remove bad ones."""
+    shuffler = get_shuffler()
+    proxies = shuffler.get_proxy_list()
+
+    if not proxies:
+        console.print("[yellow]No proxies to check[/yellow]")
+        return
+
+    console.print(
+        f"[cyan]Checking {len(proxies)} proxies (timeout: {timeout}s)...[/cyan]\n"
+    )
+
+    working, broken = asyncio.run(shuffler.check_proxies(timeout))
+
+    console.print(f"[green]Working: {len(working)}[/green]")
+    if working:
+        for p in working:
+            console.print(f"  ✓ {p}")
+
+    console.print(f"\n[red]Broken: {len(broken)}[/red]")
+    if broken:
+        for p in broken:
+            console.print(f"  ✗ {p}")
+
+    if broken and remove:
+        removed = asyncio.run(shuffler.remove_proxies(broken))
+        console.print(f"\n[green]Removed {removed} broken proxies[/green]")
+    elif broken:
+        console.print(
+            f"\n[yellow]Run with --remove to automatically remove broken proxies[/yellow]"
+        )
+
+
+@shuffle_app.command("status")
+def shuffle_status():
+    """Show IP shuffler status."""
+    shuffler = get_shuffler()
+    status = shuffler.get_status()
+
+    table = Table(title="IP Shuffler Status")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="green")
+
+    table.add_row(
+        "Enabled", "[green]Yes[/green]" if status["enabled"] else "[yellow]No[/yellow]"
+    )
+    table.add_row(
+        "Running", "[green]Yes[/green]" if status["running"] else "[dim]No[/dim]"
+    )
+    table.add_row("Interval", f"{status['interval']}s ({status['interval'] // 60} min)")
+    table.add_row("Proxy Count", str(status["proxy_count"]))
+    table.add_row("Current Index", str(status["current_index"]))
+    table.add_row("Current Proxy", status["current_proxy"] or "[dim]None[/dim]")
+    table.add_row(
+        "Current Session",
+        status["current_session_id"][:16] + "..."
+        if status["current_session_id"]
+        else "[dim]None[/dim]",
+    )
+
+    if status["last_shuffle"] > 0:
+        elapsed = time.time() - status["last_shuffle"]
+        table.add_row("Last Shuffle", f"{int(elapsed)}s ago")
+    else:
+        table.add_row("Last Shuffle", "[dim]Never[/dim]")
+
+    console.print(table)
+
+    if status["proxy_list"]:
+        console.print("\n[cyan]Proxy List:[/cyan]")
+        for i, proxy in enumerate(status["proxy_list"]):
+            marker = " *" if i == status["current_index"] else "  "
+            console.print(f"  {marker}{i + 1}. {proxy}")
 
 
 if __name__ == "__main__":
