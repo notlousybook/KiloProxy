@@ -1,6 +1,7 @@
 """Server runner module for daemon mode."""
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ app = typer.Typer()
 
 LOG_DIR = Path.home() / ".kilo-proxy" / "logs"
 LOG_FILE = LOG_DIR / "server.log"
+PID_FILE = Path.home() / ".kilo-proxy" / "server.pid"
 
 
 def setup_logging():
@@ -44,6 +46,19 @@ def get_uvicorn_config(host: str, port: int):
     return config
 
 
+def write_pid():
+    """Write PID file for the server process."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def remove_pid():
+    """Remove PID file."""
+    if PID_FILE.exists():
+        PID_FILE.unlink()
+
+
 @app.command()
 def run(
     host: str = typer.Option("127.0.0.1", "--host", "-h"),
@@ -53,7 +68,10 @@ def run(
     from kilo_proxy import __version__
 
     logger = setup_logging()
-    logger.info(f"Starting Kilo Proxy v{__version__} on {host}:{port}")
+    
+    # Write PID file so the server can be tracked
+    write_pid()
+    logger.info(f"Starting Kilo Proxy v{__version__} on {host}:{port} (PID: {os.getpid()})")
     console.print(f"[green]Starting Kilo Proxy v{__version__} on {host}:{port}[/green]")
 
     try:
@@ -81,7 +99,11 @@ def run(
         )
 
     server = uvicorn.Server(config)
-    server.run()
+    try:
+        server.run()
+    finally:
+        # Clean up PID file on exit
+        remove_pid()
 
 
 if __name__ == "__main__":

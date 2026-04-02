@@ -152,12 +152,8 @@ def get_auth_token(authorization: Optional[str] = None) -> Optional[str]:
 
 
 def get_extra_headers(request: Request) -> Dict[str, str]:
-    """Extract extra headers like x-kilocode-mode from request."""
-    extra = {}
-    kilo_mode = request.headers.get("x-kilocode-mode")
-    if kilo_mode:
-        extra["x-kilocode-mode"] = kilo_mode
-    return extra
+    """Extract extra headers from request."""
+    return {}
 
 
 def is_free_model(model_id: str, model_name: str = "") -> bool:
@@ -167,8 +163,14 @@ def is_free_model(model_id: str, model_name: str = "") -> bool:
     1. Models with :free in ID
     2. Models without / in ID (stealth free models)
     3. Models with (free) in name
+    4. OpenRouter models (openrouter/*)
     """
-    return ":free" in model_id or "/" not in model_id or "(free)" in model_name.lower()
+    return (
+        ":free" in model_id
+        or "/" not in model_id
+        or "(free)" in model_name.lower()
+        or model_id.startswith("openrouter/")
+    )
 
 
 @app.get("/health")

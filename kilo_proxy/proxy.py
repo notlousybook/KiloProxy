@@ -7,18 +7,13 @@ import httpx
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from kilo_proxy.config import load_config, generate_kilo_session_id
+from kilo_proxy.config import load_config
 from kilo_proxy.ip_shuffler import get_shuffler
 
 BASE_URL = "https://api.kilo.ai/api/openrouter"
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
-    "HTTP-Referer": "https://kilocode.ai",
-    "User-Agent": "opencode-kilo-provider",
-    "X-KILOCODE-EDITORNAME": "Kilo CLI",
-    "X-KILOCODE-FEATURE": "cli",
-    "X-Title": "Kilo Code",
 }
 
 
@@ -27,14 +22,8 @@ def get_headers(
 ) -> Dict[str, str]:
     config = load_config()
     token = auth_token or config.auth_token or "anonymous"
-    shuffler = get_shuffler()
-    if shuffler.is_enabled():
-        session_id = shuffler.get_current_session_id()
-    else:
-        session_id = config.session_id or generate_kilo_session_id()
     headers = DEFAULT_HEADERS.copy()
     headers["Authorization"] = f"Bearer {token}"
-    headers["X-KILOCODE-TASKID"] = session_id
     if extra_headers:
         headers.update(extra_headers)
     return headers
