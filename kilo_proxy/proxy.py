@@ -1,6 +1,7 @@
 """Core proxy logic for kilo-proxy."""
 
 import json
+import logging
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 import httpx
@@ -9,6 +10,8 @@ from fastapi.responses import StreamingResponse
 
 from kilo_proxy.config import load_config
 from kilo_proxy.ip_shuffler import get_shuffler
+
+logger = logging.getLogger("kilo-proxy")
 
 BASE_URL = "https://api.kilo.ai/api/openrouter"
 

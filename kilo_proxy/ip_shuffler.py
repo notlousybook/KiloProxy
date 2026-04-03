@@ -253,13 +253,8 @@ class IPShuffler:
 
         return working, broken
 
-    async def remove_proxies(self, proxies: List[str]) -> int:
-        """Remove multiple proxies from the list."""
-        removed = 0
-        for proxy in proxies:
-            if await self.remove_proxy(proxy):
-                removed += 1
-        return removed
+    async def remove_proxy(self, proxy_url: str) -> bool:
+        """Remove a single proxy from the list."""
         if proxy_url in self._proxy_list:
             self._proxy_list.remove(proxy_url)
             if (
@@ -274,6 +269,14 @@ class IPShuffler:
             await self._save_state()
             return True
         return False
+
+    async def remove_proxies(self, proxies: List[str]) -> int:
+        """Remove multiple proxies from the list."""
+        removed = 0
+        for proxy in proxies:
+            if await self.remove_proxy(proxy):
+                removed += 1
+        return removed
 
     async def clear_proxies(self):
         self._proxy_list = []

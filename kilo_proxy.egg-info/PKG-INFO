@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: kilo-proxy
-Version: 1.0.0
+Version: 1.1.0
 Summary: Fully OpenAI-compatible API proxy for Kilo
 Author-email: lousybook94 <lousybook94@gmail.com>
 License: MIT
@@ -24,7 +24,12 @@ Requires-Dist: rich>=13.0.0
 
 # Kilo Proxy
 
+[![PyPI](https://img.shields.io/pypi/v/kilo-proxy?color=blue)](https://pypi.org/project/kilo-proxy/)
+[![GitHub](https://img.shields.io/github/license/notlousybook/KiloProxy)](https://github.com/notlousybook/KiloProxy)
+
 A fully OpenAI-compatible API proxy for Kilo.
+
+[GitHub](https://github.com/notlousybook/KiloProxy) • [PyPI](https://pypi.org/project/kilo-proxy/)
 
 ## Features
 
@@ -38,13 +43,13 @@ A fully OpenAI-compatible API proxy for Kilo.
 ## Installation
 
 ```bash
-pip install -e .
+pip install kilo-proxy
 ```
 
 Or install from source:
 
 ```bash
-pip install .
+pip install -e .
 ```
 
 ## CLI Commands
@@ -116,6 +121,78 @@ kilo-proxy broke          # Toggle broke mode
 kilo-proxy broke on       # Enable broke mode
 kilo-proxy broke off      # Disable broke mode
 kilo-proxy broke --list   # List all free models
+```
+
+### Restart Server
+
+Restart the proxy server:
+
+```bash
+kilo-proxy restart
+```
+
+### Generate New Session
+
+Generate a new session ID to bypass rate limits:
+
+```bash
+kilo-proxy new-session
+```
+
+### View Logs
+
+View server logs:
+
+```bash
+kilo-proxy logs                    # Show last 100 lines
+kilo-proxy logs --lines 50        # Show last 50 lines
+kilo-proxy logs --errors          # Show errors only
+kilo-proxy logs --follow          # Follow log output
+```
+
+### Start Proxy and OpenCode
+
+Start the proxy and launch OpenCode:
+
+```bash
+kilo-proxy opencode
+```
+
+### IP Shuffler
+
+Rotate your IP address to bypass rate limits! Load proxies from a URL or file, and the shuffler will automatically rotate your IP at a set interval.
+
+```bash
+# Enable/disable IP shuffling
+kilo-proxy shuffle on
+kilo-proxy shuffle off
+
+# Add proxies manually
+kilo-proxy shuffle add http://ip:port
+kilo-proxy shuffle add socks5://ip:port
+
+# Load proxies from URL or file (one per line, # for comments)
+kilo-proxy shuffle load https://example.com/proxies.txt
+kilo-proxy shuffle load ./proxies.txt
+
+# List configured proxies
+kilo-proxy shuffle list
+
+# Set shuffle interval (minimum 60 seconds)
+kilo-proxy shuffle interval 300
+
+# Force immediate shuffle
+kilo-proxy shuffle now
+
+# Check all proxies (mark working/broken)
+kilo-proxy shuffle check
+kilo-proxy shuffle check --remove  # Auto-remove broken proxies
+
+# Fix/normalize proxy URLs
+kilo-proxy shuffle fix
+
+# View shuffler status
+kilo-proxy shuffle status
 ```
 
 ### Configuration Wizard
@@ -247,6 +324,7 @@ MIT
 ## Author
 
 - **lousybook94** (notlousybook)
-- GitHub: https://github.com/notlousybook
+- GitHub: https://github.com/notlousybook/KiloProxy
+- PyPI: https://pypi.org/project/kilo-proxy/
 - Email: lousybook94@gmail.com
 - Location: Pluto, the planet
